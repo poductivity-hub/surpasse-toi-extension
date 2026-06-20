@@ -55,7 +55,7 @@ Listeners :
 2. Si les conditions sont à nouveau réunies → démarre un nouveau segment.
 3. Sinon → `activeDomain = null`.
 
-Domaines ignorés : tout ce qui n'est pas `http(s)` (les `chrome://`, `about:`, etc. sont filtrés par `extractDomain`) **et** `dashboard.surpassetoi.fr` (pour ne pas tracker l'usage du dashboard lui-même).
+Domaines ignorés : uniquement les schémas non `http(s)` (`chrome://`, `chrome-extension://`, `about:`, `edge://`, etc. — pages internes du navigateur sans domaine HTTP valide, filtrées par `extractDomain`). `dashboard.surpassetoi.fr` est trackée comme n'importe quel autre domaine.
 
 ## Buffer local
 

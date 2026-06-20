@@ -1,5 +1,4 @@
 const API_URL = "https://dashboard.surpassetoi.fr/api/extension/track";
-const DASHBOARD_HOST = "dashboard.surpassetoi.fr";
 const IDLE_THRESHOLD_SECONDS = 60;
 const FLUSH_ALARM = "surpasse-toi-flush";
 const BUFFER_KEY = "trackingBuffer";
@@ -24,7 +23,6 @@ function extractDomain(url) {
   try {
     const u = new URL(url);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (u.hostname === DASHBOARD_HOST) return null;
     return u.hostname;
   } catch {
     return null;
