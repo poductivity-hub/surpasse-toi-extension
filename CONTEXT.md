@@ -68,7 +68,7 @@ Listeners :
 
 Les listeners `onFocusChanged`/`onActivated`/`onStateChanged` restent la voie rapide pour la réactivité immédiate ; cette double vérification ne fait que combler l'angle mort du redémarrage du SW. N'affecte pas `MAX_SEGMENT_MS` ni la logique de flush.
 
-**claude.ai — assignation manuelle** : claude.ai n'encode pas le projet dans l'URL (`claude.ai/chat/{chatId}` est identique quel que soit le projet). Une tentative d'auto-détection du projet via content script a été **abandonnée le 2026-06-22** pour cause de fragilité (sélecteurs DOM non accessibles sans exécution réelle dans le navigateur). claude.ai est donc matchée par domaine seul et apparaît comme "Non assigné" par défaut sauf configuration manuelle (WorkContext avec entrée `claude.ai`).
+**claude.ai — assignation manuelle uniquement** : claude.ai n'encode pas le projet dans l'URL (`claude.ai/chat/{chatId}` est identique quel que soit le projet). Une tentative d'auto-détection du projet via content script (fichier `content-claude.js`) a été **abandonnée le 2026-06-22** — le DOM de claude.ai est trop fragile à cibler sans exécution réelle du navigateur, et les sélecteurs ne survivent pas aux mises à jour. Il n'existe donc **aucun fichier content script** dans l'extension. claude.ai est matchée par domaine seul et apparaît comme "Non assigné" par défaut sauf configuration manuelle (WorkContext avec entrée domaine+chemin, ex. `claude.ai/project/abc123`, côté dashboard).
 
 Domaines ignorés : uniquement les schémas non `http(s)` (`chrome://`, `chrome-extension://`, `about:`, `edge://`, etc. — pages internes du navigateur sans domaine HTTP valide, filtrées par `extractDomain`). `dashboard.surpassetoi.fr` est trackée comme n'importe quel autre domaine.
 
