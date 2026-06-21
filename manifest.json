@@ -3,7 +3,7 @@
   "name": "Surpasse-Toi Tracker",
   "version": "0.1.0",
   "description": "Mesure le temps passé par domaine et l'envoie vers le dashboard Surpasse-Toi.",
-  "permissions": ["storage", "idle", "alarms", "tabs"],
+  "permissions": ["storage", "idle", "alarms", "tabs", "declarativeNetRequest", "declarativeNetRequestWithHostAccess"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
@@ -12,5 +12,10 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "Surpasse-Toi Tracker"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      { "id": "focus_rules", "enabled": false, "path": "rules.json" }
+    ]
   }
 }

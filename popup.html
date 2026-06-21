@@ -7,14 +7,27 @@
     body { font-family: -apple-system, system-ui, sans-serif; width: 280px; padding: 14px; margin: 0; }
     h1 { font-size: 14px; margin: 0 0 10px; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #444; }
-    input { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; }
     button { margin-top: 8px; width: 100%; padding: 8px; font-size: 13px; border: 0; border-radius: 4px; background: #111; color: #fff; cursor: pointer; }
     button.secondary { background: #eee; color: #111; }
+    button.danger { background: #b91c1c; }
     .status { font-size: 12px; margin-bottom: 10px; color: #2a7d2a; }
+    .error { font-size: 12px; margin-bottom: 10px; color: #b91c1c; }
+    .field { margin-bottom: 10px; }
+    .durations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+    .duration-pill {
+      flex: 0 0 auto; padding: 6px 10px; font-size: 12px; border: 1px solid #ccc;
+      border-radius: 999px; background: #fff; color: #111; cursor: pointer;
+    }
+    .duration-pill.selected { background: #111; color: #fff; border-color: #111; }
+    .session-card { text-align: center; }
+    .session-list-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+    .session-list-type { font-size: 11px; color: #888; margin-bottom: 12px; text-transform: uppercase; }
+    .timer { font-size: 28px; font-weight: 700; margin-bottom: 14px; font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
-  <h1>Surpasse-Toi Tracker</h1>
+  <h1>Surpasse-Toi</h1>
   <div id="root"></div>
   <script src="popup.js"></script>
 </body>

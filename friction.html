@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Friction — Surpasse-Toi</title>
+  <style>
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      max-width: 640px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #111;
+    }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+    .imposed-text {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 16px;
+      user-select: none;
+    }
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 140px;
+      padding: 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      resize: vertical;
+      font-family: inherit;
+    }
+    .counter { font-size: 12px; color: #666; margin: 6px 0 16px; }
+    .counter.ok { color: #2a7d2a; }
+    button {
+      padding: 10px 18px;
+      font-size: 14px;
+      border: 0;
+      border-radius: 6px;
+      background: #111;
+      color: #fff;
+      cursor: pointer;
+    }
+    button.secondary { background: #eee; color: #111; margin-right: 8px; }
+    button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+    .countdown {
+      font-size: 40px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      margin: 24px 0;
+    }
+    .step { display: none; }
+    .step.active { display: block; }
+    .hint { font-size: 12px; color: #888; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Avant d'abandonner</h1>
+  <div class="subtitle">Tu as choisi cette session. Voici la friction que tu as toi-même mise en place.</div>
+
+  <div id="step-chars" class="step">
+    <div class="imposed-text" id="imposedText"></div>
+    <textarea id="typed" placeholder="Recopie le texte ci-dessus, sans le copier-coller..."></textarea>
+    <div class="counter" id="counter">0 / 0</div>
+    <button id="confirmChars" disabled>Continuer</button>
+  </div>
+
+  <div id="step-delay" class="step">
+    <div class="countdown" id="countdown">--:--</div>
+    <div class="hint">Le délai sert à laisser passer l'impulsion. Tu peux annuler à tout moment.</div>
+    <button id="cancelDelay" class="secondary">Annuler</button>
+    <button id="unlockNow" disabled>Débloquer maintenant</button>
+  </div>
+
+  <div id="step-confirm" class="step">
+    <button id="confirmAbandon">Confirmer l'abandon</button>
+    <button id="cancelAll" class="secondary">Annuler, rester focus</button>
+  </div>
+
+  <script src="friction.js"></script>
+</body>
+</html>

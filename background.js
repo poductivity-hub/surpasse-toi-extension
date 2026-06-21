@@ -1,8 +1,13 @@
 const API_URL = "https://dashboard.surpassetoi.fr/api/extension/track";
+const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/focus-lists";
+const FOCUS_SESSIONS_API = "https://dashboard.surpassetoi.fr/api/focus-sessions";
 const IDLE_THRESHOLD_SECONDS = 60;
 const FLUSH_ALARM = "surpasse-toi-flush";
+const FOCUS_ALARM = "focusEnd";
 const BUFFER_KEY = "trackingBuffer";
 const TOKEN_KEY = "apiToken";
+const FOCUS_SESSION_KEY = "activeFocusSession";
+const WHITELIST_BLOCK_RULE_ID = 1000;
 
 let activeDomain = null;
 let segmentStartedAt = null;
@@ -119,3 +124,137 @@ async function sendBuffer() {
     }
   }
 }
+
+function buildDynamicRules(listType, domains) {
+  const rules = [];
+  if (listType === "blacklist") {
+    domains.forEach((domain, i) => {
+      rules.push({
+        id: i + 1,
+        priority: 1,
+        action: { type: "block" },
+        condition: { urlFilter: `||${domain}`, resourceTypes: ["main_frame"] }
+      });
+    });
+  } else if (listType === "whitelist") {
+    domains.forEach((domain, i) => {
+      rules.push({
+        id: i + 1,
+        priority: 2,
+        action: { type: "allow" },
+        condition: { urlFilter: `||${domain}`, resourceTypes: ["main_frame"] }
+      });
+    });
+    rules.push({
+      id: WHITELIST_BLOCK_RULE_ID,
+      priority: 1,
+      action: { type: "block" },
+      condition: { urlFilter: "*", resourceTypes: ["main_frame"] }
+    });
+  }
+  return rules;
+}
+
+async function clearDynamicRules() {
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  const removeRuleIds = existing.map((r) => r.id);
+  if (removeRuleIds.length) {
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+  }
+}
+
+async function startFocusSession(list, durationMin) {
+  const { [TOKEN_KEY]: token } = await chrome.storage.local.get(TOKEN_KEY);
+
+  const res = await fetch(FOCUS_SESSIONS_API, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ focusListId: list.id, durationMin })
+  });
+  if (!res.ok) throw new Error("Impossible de démarrer la session");
+  const data = await res.json();
+  const sessionId = data.id ?? data.sessionId;
+
+  const rules = buildDynamicRules(list.type, list.domains || []);
+  await clearDynamicRules();
+  if (rules.length) {
+    await chrome.declarativeNetRequest.updateDynamicRules({ addRules: rules });
+  }
+
+  const state = {
+    sessionId,
+    focusListId: list.id,
+    listName: list.name,
+    listType: list.type,
+    domains: list.domains || [],
+    durationMin,
+    startedAt: Date.now(),
+    frictionType: list.frictionType,
+    frictionChars: list.frictionChars,
+    frictionDelay: list.frictionDelay,
+    abandonCount: 0
+  };
+  await chrome.storage.local.set({ [FOCUS_SESSION_KEY]: state });
+  chrome.alarms.create(FOCUS_ALARM, { delayInMinutes: durationMin });
+  return state;
+}
+
+async function endFocusSession(abandoned) {
+  const { [FOCUS_SESSION_KEY]: state } = await chrome.storage.local.get(FOCUS_SESSION_KEY);
+  if (!state) return;
+
+  await clearDynamicRules();
+  chrome.alarms.clear(FOCUS_ALARM);
+
+  const { [TOKEN_KEY]: token } = await chrome.storage.local.get(TOKEN_KEY);
+  const abandonCount = abandoned ? (state.abandonCount || 0) + 1 : state.abandonCount || 0;
+  try {
+    await fetch(FOCUS_SESSIONS_API, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: state.sessionId,
+        endedAt: new Date().toISOString(),
+        abandoned: !!abandoned,
+        abandonCount
+      })
+    });
+  } catch {
+    // best effort, on nettoie quand même l'état local
+  }
+
+  await chrome.storage.local.remove(FOCUS_SESSION_KEY);
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== FOCUS_ALARM) return;
+  await endFocusSession(false);
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "startFocusSession") {
+    startFocusSession(message.list, message.durationMin)
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+  if (message?.type === "endFocusSession") {
+    endFocusSession(!!message.abandoned)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+  if (message?.type === "getFocusSession") {
+    chrome.storage.local.get(FOCUS_SESSION_KEY).then(({ [FOCUS_SESSION_KEY]: state }) => {
+      sendResponse({ ok: true, state: state || null });
+    });
+    return true;
+  }
+  return false;
+});
