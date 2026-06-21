@@ -128,7 +128,6 @@ function renderActiveSession(root, state) {
       <div class="session-list-name">${state.listName || "Session de focus"}</div>
       <div class="session-list-type">${state.listType === "whitelist" ? "Whitelist" : "Blacklist"}</div>
       <div class="timer" id="timer">--:--</div>
-      <button id="end">Terminer la session</button>
       <button id="abandon" class="danger">Débloquer (abandonner)</button>
     </div>
   `;
@@ -144,12 +143,6 @@ function renderActiveSession(root, state) {
   };
   tick();
   timerInterval = setInterval(tick, 1000);
-
-  document.getElementById("end").addEventListener("click", async () => {
-    stopTimer();
-    await sendMessage({ type: "endFocusSession", abandoned: false });
-    render();
-  });
 
   document.getElementById("abandon").addEventListener("click", async () => {
     stopTimer();
