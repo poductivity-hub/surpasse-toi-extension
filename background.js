@@ -25,11 +25,28 @@ let userIdle = false;
 
 chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
 
+// Recale windowFocused/userIdle sur l'état réel au (re)démarrage du service worker,
+// au lieu de partir sur les valeurs en dur true/false — celles-ci seraient
+// permissives à tort si le SW redémarre alors que l'utilisateur est déjà
+// absent/idle ou sur une autre fenêtre.
+async function syncFocusAndIdleState() {
+  try {
+    const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
+    userIdle = idleState !== "active";
+    const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+    windowFocused = !!focusedWindow && focusedWindow.id !== chrome.windows.WINDOW_ID_NONE && !!focusedWindow.focused;
+  } catch {
+    // best effort — la vérification live dans recomputeActiveSegment() reste le filet de sécurité
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  syncFocusAndIdleState();
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  syncFocusAndIdleState();
 });
 
 function extractDomain(url) {
@@ -109,9 +126,25 @@ async function flushSegmentIfAny() {
   await chrome.storage.local.set({ [BUFFER_KEY]: buffer });
 }
 
+// Filet de sécurité à l'ouverture : si le service worker MV3 a été tué par Chrome
+// (~30 s d'inactivité) puis réveillé par un évènement, windowFocused/userIdle
+// retombent sur leurs valeurs par défaut en mémoire (true/false) — permissives et
+// potentiellement fausses. On revérifie donc l'état réel en direct juste avant
+// d'ouvrir un nouveau segment, plutôt que de faire confiance au cache. Les
+// listeners onFocusChanged/onActivated/onStateChanged restent la voie rapide pour
+// la réactivité immédiate ; cette vérification ne les remplace pas.
+async function isReallyActiveNow() {
+  const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
+  if (idleState !== "active") return false;
+  const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+  if (!focusedWindow || focusedWindow.id === chrome.windows.WINDOW_ID_NONE) return false;
+  return !!focusedWindow.focused;
+}
+
 async function recomputeActiveSegment() {
   await flushSegmentIfAny();
   if (!windowFocused || userIdle) return;
+  if (!(await isReallyActiveNow())) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) return;
   const domain = extractDomain(tab.url);
