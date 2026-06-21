@@ -10,6 +10,7 @@ const FOCUS_SESSION_KEY = "activeFocusSession";
 const WHITELIST_BLOCK_RULE_ID = 1000;
 
 let activeDomain = null;
+let activePath = null;
 let segmentStartedAt = null;
 let windowFocused = true;
 let userIdle = false;
@@ -34,6 +35,22 @@ function extractDomain(url) {
   }
 }
 
+// Pathname uniquement — JAMAIS la query string (?...) ni le fragment (#...),
+// `URL.pathname` ne les inclut jamais par construction. Retourne null si le
+// pathname n'est pas significatif (absent ou simple "/").
+function extractPath(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    const pathname = u.pathname;
+    if (!pathname || pathname === "/") return null;
+    return pathname;
+  } catch {
+    return null;
+  }
+}
+
 function todayString(ts) {
   const d = new Date(ts);
   const y = d.getFullYear();
@@ -42,20 +59,34 @@ function todayString(ts) {
   return `${y}-${m}-${day}`;
 }
 
+// `buffer[date][domain]` est un objet `{ pathKey: seconds }`, où `pathKey` est le
+// pathname réel ou "" (chaîne vide) pour "pas de path significatif". On garde la
+// compat avec l'ancien format (nombre direct, avant l'ajout du path) en migrant
+// à la volée vers `{ "": ancienneValeur }` dès qu'on retombe sur ce cas.
+function migrateDomainEntry(entry) {
+  if (typeof entry === "number") return { "": entry };
+  return entry || {};
+}
+
 async function flushSegmentIfAny() {
   if (!activeDomain || segmentStartedAt === null) return;
   const now = Date.now();
   const startedAt = segmentStartedAt;
   const elapsedMs = now - startedAt;
   const domain = activeDomain;
+  const path = activePath;
   segmentStartedAt = null;
   activeDomain = null;
+  activePath = null;
   if (elapsedMs < 1000) return;
   const seconds = Math.floor(elapsedMs / 1000);
   const date = todayString(startedAt);
+  const pathKey = path || "";
   const { [BUFFER_KEY]: buffer = {} } = await chrome.storage.local.get(BUFFER_KEY);
   if (!buffer[date]) buffer[date] = {};
-  buffer[date][domain] = (buffer[date][domain] || 0) + seconds;
+  const domainEntry = migrateDomainEntry(buffer[date][domain]);
+  domainEntry[pathKey] = (domainEntry[pathKey] || 0) + seconds;
+  buffer[date][domain] = domainEntry;
   await chrome.storage.local.set({ [BUFFER_KEY]: buffer });
 }
 
@@ -67,6 +98,7 @@ async function recomputeActiveSegment() {
   const domain = extractDomain(tab.url);
   if (!domain) return;
   activeDomain = domain;
+  activePath = extractPath(tab.url);
   segmentStartedAt = Date.now();
 }
 
@@ -102,24 +134,37 @@ async function sendBuffer() {
 
   for (const date of Object.keys(buffer)) {
     for (const domain of Object.keys(buffer[date])) {
-      const durationSeconds = buffer[date][domain];
-      if (!durationSeconds || durationSeconds <= 0) continue;
-      try {
-        const res = await fetch(API_URL, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ domain, durationSeconds, date })
-        });
-        if (res.ok) {
-          delete buffer[date][domain];
-          if (Object.keys(buffer[date]).length === 0) delete buffer[date];
-          await chrome.storage.local.set({ [BUFFER_KEY]: buffer });
+      const domainEntry = migrateDomainEntry(buffer[date][domain]);
+
+      for (const pathKey of Object.keys(domainEntry)) {
+        const durationSeconds = domainEntry[pathKey];
+        if (!durationSeconds || durationSeconds <= 0) continue;
+        try {
+          const body = { domain, durationSeconds, date };
+          // N'envoie `path` que s'il est réellement renseigné — jamais une chaîne vide.
+          if (pathKey) body.path = pathKey;
+
+          const res = await fetch(API_URL, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body)
+          });
+          if (res.ok) {
+            delete domainEntry[pathKey];
+            if (Object.keys(domainEntry).length === 0) {
+              delete buffer[date][domain];
+            } else {
+              buffer[date][domain] = domainEntry;
+            }
+            if (Object.keys(buffer[date]).length === 0) delete buffer[date];
+            await chrome.storage.local.set({ [BUFFER_KEY]: buffer });
+          }
+        } catch {
+          // garde le buffer pour retry
         }
-      } catch {
-        // garde le buffer pour retry
       }
     }
   }

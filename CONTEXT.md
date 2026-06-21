@@ -25,8 +25,10 @@ Headers :
 
 Body :
 ```json
-{ "domain": "example.com", "durationSeconds": 123, "date": "2026-06-21" }
+{ "domain": "example.com", "path": "/project/abc123", "durationSeconds": 123, "date": "2026-06-21" }
 ```
+
+- `path` (ajouté le 2026-06-22) : optionnel, omis entièrement si absent — **jamais** envoyé comme chaîne vide. Toujours `new URL(tab.url).pathname` uniquement, jamais la query string (`?...`) ni le fragment (`#...`) — confidentialité (pas de termes de recherche ni de paramètres sensibles transmis). `null`/absent si le pathname n'est pas significatif (vide ou `"/"`). Permet au dashboard de distinguer plusieurs projets sur un même domaine (ex. deux Projects Claude différents sur `claude.ai`).
 
 Réponses :
 - `200 { "ok": true }` → succès, on retire l'entrée du buffer
@@ -42,6 +44,7 @@ Un "segment de tracking actif" n'existe que si **toutes** les conditions sont vr
 
 État en mémoire dans le service worker :
 - `activeDomain: string | null`
+- `activePath: string | null` (pathname uniquement, `extractPath()` — ajouté le 2026-06-22)
 - `segmentStartedAt: number | null` (timestamp ms)
 - `windowFocused: boolean`
 - `userIdle: boolean`
@@ -66,24 +69,26 @@ Stocké dans `chrome.storage.local` sous la clé `trackingBuffer` :
 ```json
 {
   "2026-06-21": {
-    "youtube.com": 1834,
-    "github.com": 612
+    "youtube.com": { "": 1834 },
+    "github.com": { "": 400, "/org/repo": 212 },
+    "claude.ai": { "/project/abc123": 900, "/project/xyz789": 300 }
   },
   "2026-06-22": {
-    "linkedin.com": 240
+    "linkedin.com": { "": 240 }
   }
 }
 ```
 
-- Indexé par date `YYYY-MM-DD` (date locale du début de segment), puis par domaine.
-- Valeur = durée cumulée en secondes depuis le dernier flush réussi pour ce (date, domaine).
+- Indexé par date `YYYY-MM-DD` (date locale du début de segment), puis par domaine, puis par **chemin** (`pathKey`, ajouté le 2026-06-22) — `pathKey` est le pathname réel (ex. `"/project/abc123"`) ou `""` (chaîne vide) pour "pas de chemin significatif".
+- Valeur = durée cumulée en secondes depuis le dernier flush réussi pour ce (date, domaine, chemin).
+- **Rétrocompatibilité** : si `buffer[date][domain]` est encore un nombre direct (ancien format, avant l'ajout du path), `migrateDomainEntry()` le convertit à la volée en `{ "": ancienneValeur }` au premier flush ou envoi — aucune perte de données pour les buffers en attente lors de la mise à jour de l'extension.
 
 ## Flush périodique
 
 `chrome.alarms` toutes les 60 s (`FLUSH_ALARM`) :
 1. Termine le segment en cours (l'ajoute au buffer) pour ne rien perdre.
 2. Lit le token (`apiToken`). Si absent : ne rien envoyer, garder le buffer.
-3. Pour chaque (date, domaine) avec total > 0 : `POST /api/extension/track`.
+3. Pour chaque (date, domaine, chemin) avec total > 0 : `POST /api/extension/track`, avec `path` inclus dans le body uniquement si `pathKey` n'est pas vide.
 4. Si `200` → retire l'entrée du buffer.
 5. Sinon → garde le buffer, retry au prochain alarm.
 6. Relance un segment frais si les conditions sont toujours réunies.
