@@ -60,7 +60,18 @@ Listeners :
 2. Si les conditions sont à nouveau réunies → démarre un nouveau segment.
 3. Sinon → `activeDomain = null`.
 
+**Déduplication multi-onglets/fenêtres** : l'état est constitué de singletons globaux (`activeDomain`/`activePath`/`segmentStartedAt`) — il ne peut donc structurellement exister qu'**un seul segment actif à la fois**. Tous les listeners passent par `recomputeActiveSegment()`, qui `flushSegmentIfAny()` (clôture et crédite le segment précédent) **avant** de démarrer le nouveau. Le tracking par `path` ne crée pas de parallélisme : le flush ferme l'ancien couple `(domaine, path)` avant que le nouveau path soit posé.
+
 Domaines ignorés : uniquement les schémas non `http(s)` (`chrome://`, `chrome-extension://`, `about:`, `edge://`, etc. — pages internes du navigateur sans domaine HTTP valide, filtrées par `extractDomain`). `dashboard.surpassetoi.fr` est trackée comme n'importe quel autre domaine.
+
+## Anti-veille / anti-sur-comptage (ajouté le 2026-06-22)
+
+**Problème corrigé** : pendant une mise en veille de l'OS, le processus est *gelé* (RAM conservée) donc `segmentStartedAt` survit, mais le flush alarm ne tourne pas. Au réveil, le premier flush calculait `now - segmentStartedAt` = **toute la durée de la veille** et la créditait au dernier domaine actif (symptôme observé : 16 h 55 affichées à 13 h 31). La détection `chrome.idle` (60 s) ne couvre que le cas « machine éveillée mais utilisateur absent », pas une veille brutale.
+
+Trois garde-fous :
+1. **Cap par segment** (`MAX_SEGMENT_MS = 90 s`) dans `flushSegmentIfAny()` : un segment légitime ne dépasse jamais ~60 s (intervalle du flush alarm qui redémarre un segment frais à chaque passage) ; 90 s laisse une marge. Tout segment plus long est un « trou » de veille/suspension → **aucun temps crédité**, on repart sur un segment neuf. C'est le correctif central.
+2. **Détection idle** (`chrome.idle.onStateChanged`, seuil 60 s) : `idle`/`locked` mettent `userIdle = true` ; aucun nouveau segment ne démarre tant que l'utilisateur est inactif.
+3. **Fil d'alarme de validation** (`auditDailyTotals`, appelé en tête de `sendBuffer`) : si le total cumulé d'aujourd'hui dépasse le temps écoulé depuis minuit local (+120 s de marge), un `console.warn` est émis. Non bloquant (le cap empêche déjà l'accumulation aberrante ; bloquer risquerait de droper une journée légitime sur un faux positif).
 
 ## Buffer local
 

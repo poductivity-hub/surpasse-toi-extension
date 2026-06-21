@@ -2,6 +2,14 @@ const API_URL = "https://dashboard.surpassetoi.fr/api/extension/track";
 const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/focus-lists";
 const FOCUS_SESSIONS_API = "https://dashboard.surpassetoi.fr/api/focus-sessions";
 const IDLE_THRESHOLD_SECONDS = 60;
+// Garde-fou anti-veille : durée maximale plausible pour UN segment. Le flush alarm
+// tourne toutes les 60 s et redémarre un segment frais à chaque passage, donc un
+// segment légitime (lecture continue d'une page) ne dépasse jamais ~60 s. On laisse
+// 90 s de marge au-dessus de cet intervalle. Tout segment plus long = la machine a
+// dormi / été suspendue pendant le décompte → on l'ignore au lieu de créditer l'écart.
+// (Le prompt suggérait 30-60 s, mais ce seuil découperait à tort les segments de ~60 s
+// qui sont normaux ici puisque le flush est à 60 s — d'où 90 s.)
+const MAX_SEGMENT_MS = 90 * 1000;
 const FLUSH_ALARM = "surpasse-toi-flush";
 const FOCUS_ALARM = "focusEnd";
 const BUFFER_KEY = "trackingBuffer";
@@ -79,6 +87,17 @@ async function flushSegmentIfAny() {
   activeDomain = null;
   activePath = null;
   if (elapsedMs < 1000) return;
+  // Garde-fou veille/suspension : un écart anormalement grand entre le début du
+  // segment et maintenant signifie que la machine a dormi/été suspendue (RAM gelée,
+  // les alarmes ne tournent pas, mais segmentStartedAt survit). On NE crédite RIEN :
+  // on traite l'intervalle comme un "trou" et on laisse repartir un segment frais.
+  if (elapsedMs > MAX_SEGMENT_MS) {
+    console.warn(
+      `[surpasse-toi] Segment ignoré : ${Math.round(elapsedMs / 1000)}s écoulées (> ${MAX_SEGMENT_MS / 1000}s) ` +
+      `pour ${domain}${path || ""} — probable veille/suspension, aucun temps crédité.`
+    );
+    return;
+  }
   const seconds = Math.floor(elapsedMs / 1000);
   const date = todayString(startedAt);
   const pathKey = path || "";
@@ -127,10 +146,46 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await recomputeActiveSegment();
 });
 
+// Secondes écoulées depuis minuit local pour le timestamp donné.
+function secondsSinceLocalMidnight(ts) {
+  const d = new Date(ts);
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+}
+
+// Garde-fou de validation : le total cumulé d'AUJOURD'HUI ne peut jamais dépasser
+// le temps écoulé depuis minuit local. Si c'est le cas, un bug a réintroduit du
+// sur-comptage (ex. crédit de temps de veille) — on alerte bruyamment dans la
+// console du service worker. On ne bloque pas l'envoi : le cap par segment empêche
+// déjà l'accumulation aberrante, et droper une journée entière sur un faux positif
+// (changement d'heure, etc.) ferait plus de mal que de bien. C'est un fil d'alarme.
+function auditDailyTotals(buffer) {
+  const today = todayString(Date.now());
+  const dayEntry = buffer[today];
+  if (!dayEntry) return;
+  let total = 0;
+  for (const domain of Object.keys(dayEntry)) {
+    const domainEntry = migrateDomainEntry(dayEntry[domain]);
+    for (const pathKey of Object.keys(domainEntry)) {
+      total += domainEntry[pathKey] || 0;
+    }
+  }
+  const elapsed = secondsSinceLocalMidnight(Date.now());
+  // Petite marge pour l'arrondi et un éventuel léger décalage d'horloge.
+  if (total > elapsed + 120) {
+    console.warn(
+      `[surpasse-toi] INCOHÉRENCE : total navigué aujourd'hui = ${total}s ` +
+      `(${(total / 3600).toFixed(2)}h) > temps écoulé depuis minuit = ${elapsed}s ` +
+      `(${(elapsed / 3600).toFixed(2)}h). Sur-comptage probable — à investiguer.`
+    );
+  }
+}
+
 async function sendBuffer() {
   const { [TOKEN_KEY]: token, [BUFFER_KEY]: buffer = {} } =
     await chrome.storage.local.get([TOKEN_KEY, BUFFER_KEY]);
   if (!token) return;
+
+  auditDailyTotals(buffer);
 
   for (const date of Object.keys(buffer)) {
     for (const domain of Object.keys(buffer[date])) {
