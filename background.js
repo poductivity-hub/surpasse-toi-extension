@@ -22,10 +22,6 @@ let activePath = null;
 let segmentStartedAt = null;
 let windowFocused = true;
 let userIdle = false;
-// Nom du projet Claude courant, capté par content-claude.js (claude.ai
-// n'encode pas le projet dans l'URL). null si inconnu/non significatif.
-// Inclus dans le payload de tracking uniquement quand le domaine est claude.ai.
-let claudeProjectLabel = null;
 
 chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
 
@@ -202,9 +198,6 @@ async function sendBuffer() {
           const body = { domain, durationSeconds, date };
           // N'envoie `path` que s'il est réellement renseigné — jamais une chaîne vide.
           if (pathKey) body.path = pathKey;
-          // `label` (nom de projet Claude) uniquement pour claude.ai et s'il
-          // est renseigné — jamais une chaîne vide.
-          if (domain === "claude.ai" && claudeProjectLabel) body.label = claudeProjectLabel;
 
           const res = await fetch(API_URL, {
             method: "POST",
@@ -345,14 +338,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "claudeProjectLabel") {
-    // Envoyé par content-claude.js à chaque changement de label détecté.
-    const label = typeof message.label === "string" && message.label.trim()
-      ? message.label.trim()
-      : null;
-    claudeProjectLabel = label;
-    return false;
-  }
   if (message?.type === "startFocusSession") {
     startFocusSession(message.list, message.durationMin)
       .then((state) => sendResponse({ ok: true, state }))

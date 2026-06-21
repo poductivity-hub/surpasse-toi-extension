@@ -6,11 +6,9 @@ Extension Manifest V3 qui (1) mesure le temps passé par domaine et l'envoie au 
 
 ```
 manifest.json    Manifest V3 : permissions storage/idle/alarms/tabs/declarativeNetRequest(+WithHostAccess),
-                 host_permissions <all_urls>, declarative_net_request.rule_resources (rules.json, désactivé par défaut),
-                 content_scripts (content-claude.js sur https://claude.ai/*, document_idle)
+                 host_permissions <all_urls>, declarative_net_request.rule_resources (rules.json, désactivé par défaut)
 rules.json       Règles statiques DNR — vide, tout le blocage se fait via règles dynamiques
 background.js    Service worker (module) : tracking focus/idle + logique de session de focus (DNR, alarms, API)
-content-claude.js Content script claude.ai : capte le nom du projet (breadcrumb/title) et l'envoie au service worker
 popup.html/js    UI du popup, 2 états : formulaire de démarrage de session / session active avec timer
 friction.html/js Page ouverte dans un nouvel onglet pour abandonner une session (recopie de texte + délai)
 ```
@@ -31,7 +29,6 @@ Body :
 ```
 
 - `path` (ajouté le 2026-06-22) : optionnel, omis entièrement si absent — **jamais** envoyé comme chaîne vide. Toujours `new URL(tab.url).pathname` uniquement, jamais la query string (`?...`) ni le fragment (`#...`) — confidentialité (pas de termes de recherche ni de paramètres sensibles transmis). `null`/absent si le pathname n'est pas significatif (vide ou `"/"`). Permet au dashboard de distinguer plusieurs projets sur un même domaine (ex. deux Projects Claude différents sur `claude.ai`).
-- `label` (ajouté le 2026-06-22) : optionnel, envoyé **uniquement** quand `domain === "claude.ai"` et qu'un nom de projet a été capté — **jamais** une chaîne vide. Contient le nom du projet Claude lu dans l'interface (voir « Détection du projet Claude » ci-dessous). ⚠️ **Côté serveur, ce champ n'est pas encore consommé** : la route `/api/extension/track` ignore `label` et `BrowsingLog` n'a pas de colonne dédiée. La capture côté extension est en place ; le backend (schéma Prisma + route + assignation WorkContext) reste à faire pour rendre la feature fonctionnelle de bout en bout.
 
 Réponses :
 - `200 { "ok": true }` → succès, on retire l'entrée du buffer
@@ -65,24 +62,7 @@ Listeners :
 
 **Déduplication multi-onglets/fenêtres** : l'état est constitué de singletons globaux (`activeDomain`/`activePath`/`segmentStartedAt`) — il ne peut donc structurellement exister qu'**un seul segment actif à la fois**. Tous les listeners passent par `recomputeActiveSegment()`, qui `flushSegmentIfAny()` (clôture et crédite le segment précédent) **avant** de démarrer le nouveau. Le tracking par `path` ne crée pas de parallélisme : le flush ferme l'ancien couple `(domaine, path)` avant que le nouveau path soit posé.
 
-## Détection du projet Claude (`content-claude.js`, ajouté le 2026-06-22)
-
-claude.ai n'encode **pas** le projet dans l'URL : une conversation est toujours `claude.ai/chat/{chatId}`, quel que soit le projet auquel elle appartient. Le nom du projet n'est visible que dans l'interface (breadcrumb en haut de page). On le capte via un content script injecté sur `https://claude.ai/*` à `document_idle`.
-
-Stratégie de détection **en cascade** (on garde le premier résultat non vide et non générique) :
-1. **Breadcrumb / nav** : on essaie une liste de sélecteurs CSS candidats (`[data-testid*="project" i]`, `[data-testid*="breadcrumb" i]`, `nav[aria-label*="breadcrumb" i]`, `header nav`, `header [class*="breadcrumb" i]`) et on prend le premier qui matche. Si le texte contient un `/` (format « Projet / Conversation »), on garde le **premier** segment (le projet).
-2. **Repli `document.title`** : format type « Conversation - Projet » / « Conversation | Projet » → on prend le **dernier** segment.
-3. Sinon : rien (on n'envoie aucun label plutôt qu'une valeur fausse).
-
-Les valeurs génériques (`claude`, `claude.ai`, `new chat`, `nouvelle conversation`) sont filtrées et jamais envoyées.
-
-claude.ai étant une **SPA** (pas de rechargement entre conversations), la détection réagit aux changements via :
-- un `MutationObserver` sur `document.documentElement` (débounce 500 ms pour ne pas se déclencher à chaque token streamé) ;
-- le patch de `history.pushState`/`replaceState` + l'évènement `popstate`.
-
-Le label n'est envoyé au service worker (`chrome.runtime.sendMessage({ type: "claudeProjectLabel", label })`) **que lorsqu'il change** (pas à chaque mutation DOM). Chaque changement est aussi loggé en console (`[surpasse-toi] label projet Claude détecté : ...`) pour le débogage manuel. Le service worker stocke ce label dans une variable globale `claudeProjectLabel` (au même titre que `activeDomain`/`activePath`) et l'inclut dans le payload de tracking uniquement quand le domaine actif est `claude.ai` (voir le champ `label` du contrat API).
-
-> ⚠️ **État actuel** : seule la **capture côté extension** est implémentée. Le backend (`/api/extension/track`, schéma `BrowsingLog`, assignation WorkContext à partir du label) ne consomme pas encore `label` — à compléter pour rendre la feature opérationnelle.
+**claude.ai — assignation manuelle** : claude.ai n'encode pas le projet dans l'URL (`claude.ai/chat/{chatId}` est identique quel que soit le projet). Une tentative d'auto-détection du projet via content script a été **abandonnée le 2026-06-22** pour cause de fragilité (sélecteurs DOM non accessibles sans exécution réelle dans le navigateur). claude.ai est donc matchée par domaine seul et apparaît comme "Non assigné" par défaut sauf configuration manuelle (WorkContext avec entrée `claude.ai`).
 
 Domaines ignorés : uniquement les schémas non `http(s)` (`chrome://`, `chrome-extension://`, `about:`, `edge://`, etc. — pages internes du navigateur sans domaine HTTP valide, filtrées par `extractDomain`). `dashboard.surpassetoi.fr` est trackée comme n'importe quel autre domaine.
 
