@@ -11,6 +11,9 @@
 // l'API History, pas uniquement au chargement initial.
 
 (() => {
+  // Log inconditionnel : confirmation que le script est bien injecté.
+  console.log("[surpasse-toi] content-claude.js injecté sur", location.href);
+
   // Valeurs génériques qui ne sont PAS un nom de projet (ne jamais envoyer).
   const GENERIC = new Set(["claude", "claude.ai", "new chat", "nouvelle conversation"]);
 
@@ -50,12 +53,19 @@
       // (le nom du projet) ; sinon le texte complet s'il est plausible.
       if (text.includes("/")) {
         const first = clean(text.split("/")[0]);
-        if (first) return first;
+        if (first) {
+          console.log("[surpasse-toi] tentative breadcrumb (sélecteur '" + sel + "'):", first);
+          return first;
+        }
       } else {
         const c = clean(text);
-        if (c) return c;
+        if (c) {
+          console.log("[surpasse-toi] tentative breadcrumb (sélecteur '" + sel + "'):", c);
+          return c;
+        }
       }
     }
+    console.log("[surpasse-toi] tentative breadcrumb:", null);
     return null;
   }
 
@@ -64,15 +74,30 @@
   //    en écartant les valeurs génériques ("Claude").
   function detectFromTitle() {
     const title = document.title || "";
+    console.log("[surpasse-toi] tentative document.title:", title);
     const parts = title.split(/\s+[-|–]\s+/).map((p) => p.trim()).filter(Boolean);
-    if (parts.length < 2) return null;
+    if (parts.length < 2) {
+      console.log("[surpasse-toi] titre ne contient pas le séparateur attendu");
+      return null;
+    }
     const candidate = clean(parts[parts.length - 1]);
     return candidate;
   }
 
   // Cascade : breadcrumb → title → rien.
   function detectLabel() {
-    return detectFromBreadcrumb() || detectFromTitle() || null;
+    const breadcrumb = detectFromBreadcrumb();
+    if (breadcrumb) {
+      console.log("[surpasse-toi] label final retenu (breadcrumb):", breadcrumb);
+      return breadcrumb;
+    }
+    const title = detectFromTitle();
+    if (title) {
+      console.log("[surpasse-toi] label final retenu (title):", title);
+      return title;
+    }
+    console.log("[surpasse-toi] label final retenu:", null);
+    return null;
   }
 
   function detectAndSend() {
