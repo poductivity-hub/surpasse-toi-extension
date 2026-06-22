@@ -1,7 +1,8 @@
 const API_URL = "https://dashboard.surpassetoi.fr/api/extension/track";
 const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/focus-lists";
 const FOCUS_SESSIONS_API = "https://dashboard.surpassetoi.fr/api/focus-sessions";
-const IDLE_THRESHOLD_SECONDS = 60;
+const IDLE_THRESHOLD_KEY = "idleThresholdSeconds";
+const DEFAULT_IDLE_THRESHOLD_SECONDS = 60;
 // Garde-fou anti-veille : durée maximale plausible pour UN segment. Le flush alarm
 // tourne toutes les 60 s et redémarre un segment frais à chaque passage, donc un
 // segment légitime (lecture continue d'une page) ne dépasse jamais ~60 s. On laisse
@@ -23,7 +24,25 @@ let segmentStartedAt = null;
 let windowFocused = true;
 let userIdle = false;
 
-chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
+// Seuil d'inactivité configurable depuis le popup (chrome.storage.local["idleThresholdSeconds"]),
+// 60 s par défaut. Lu à chaque fois plutôt que mis en cache, pour réagir immédiatement à un
+// changement de réglage sans redémarrage du service worker.
+async function getIdleThresholdSeconds() {
+  const { [IDLE_THRESHOLD_KEY]: value } = await chrome.storage.local.get(IDLE_THRESHOLD_KEY);
+  return value || DEFAULT_IDLE_THRESHOLD_SECONDS;
+}
+
+async function applyIdleDetectionInterval() {
+  chrome.idle.setDetectionInterval(await getIdleThresholdSeconds());
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[IDLE_THRESHOLD_KEY]) {
+    applyIdleDetectionInterval();
+  }
+});
+
+applyIdleDetectionInterval();
 
 // Recale windowFocused/userIdle sur l'état réel au (re)démarrage du service worker,
 // au lieu de partir sur les valeurs en dur true/false — celles-ci seraient
@@ -31,7 +50,7 @@ chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
 // absent/idle ou sur une autre fenêtre.
 async function syncFocusAndIdleState() {
   try {
-    const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
+    const idleState = await chrome.idle.queryState(await getIdleThresholdSeconds());
     userIdle = idleState !== "active";
     const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
     windowFocused = !!focusedWindow && focusedWindow.id !== chrome.windows.WINDOW_ID_NONE && !!focusedWindow.focused;
@@ -42,10 +61,12 @@ async function syncFocusAndIdleState() {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  applyIdleDetectionInterval();
   syncFocusAndIdleState();
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  applyIdleDetectionInterval();
   syncFocusAndIdleState();
 });
 
@@ -134,17 +155,31 @@ async function flushSegmentIfAny() {
 // listeners onFocusChanged/onActivated/onStateChanged restent la voie rapide pour
 // la réactivité immédiate ; cette vérification ne les remplace pas.
 async function isReallyActiveNow() {
-  const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
+  const idleState = await chrome.idle.queryState(await getIdleThresholdSeconds());
   if (idleState !== "active") return false;
   const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
   if (!focusedWindow || focusedWindow.id === chrome.windows.WINDOW_ID_NONE) return false;
   return !!focusedWindow.focused;
 }
 
+// Un média en lecture active (son audible dans l'onglet) signifie que l'utilisateur
+// suit toujours du contenu même sans interaction clavier/souris — chrome.idle ne le
+// sait pas et déclencherait sinon une coupure de segment à tort (ex. vidéo/podcast
+// regardé sans bouger la souris pendant > seuil d'inactivité).
+async function isActiveTabAudible() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return !!tab?.audible;
+}
+
 async function recomputeActiveSegment() {
   await flushSegmentIfAny();
-  if (!windowFocused || userIdle) return;
-  if (!(await isReallyActiveNow())) return;
+  if (!windowFocused) return;
+  const audible = await isActiveTabAudible();
+  // Media qui joue activement (son audible) = utilisateur toujours engagé, même sans
+  // mouvement souris/clavier. On ignore l'état idle (chrome.idle ET la revérification
+  // live) dans ce cas précis, pour ne pas couper le segment d'une vidéo/podcast écouté.
+  if (userIdle && !audible) return;
+  if (!audible && !(await isReallyActiveNow())) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) return;
   const domain = extractDomain(tab.url);

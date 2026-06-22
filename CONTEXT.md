@@ -40,7 +40,7 @@ Réponses :
 Un "segment de tracking actif" n'existe que si **toutes** les conditions sont vraies :
 1. La fenêtre Chrome a le focus OS (`chrome.windows.onFocusChanged` ≠ `WINDOW_ID_NONE`)
 2. L'onglet actif a une URL `http(s)` valide
-3. L'utilisateur n'est pas idle (`chrome.idle`, seuil 60 s)
+3. L'utilisateur n'est pas idle (`chrome.idle`, seuil configurable, 60 s par défaut) — **sauf** si l'onglet actif joue un média audible (voir plus bas)
 
 État en mémoire dans le service worker :
 - `activeDomain: string | null`
@@ -67,6 +67,12 @@ Listeners :
 2. `syncFocusAndIdleState()`, appelée dans `onInstalled`/`onStartup`, recale `windowFocused`/`userIdle` sur l'état réel dès le démarrage du service worker plutôt que de partir sur les valeurs en dur.
 
 Les listeners `onFocusChanged`/`onActivated`/`onStateChanged` restent la voie rapide pour la réactivité immédiate ; cette double vérification ne fait que combler l'angle mort du redémarrage du SW. N'affecte pas `MAX_SEGMENT_MS` ni la logique de flush.
+
+**Seuil d'inactivité configurable (ajouté le 2026-06-23)** : le seuil (en secondes, 60 par défaut) est stocké dans `chrome.storage.local["idleThresholdSeconds"]`, réglable via un champ numérique dans le popup (visible aussi bien sur l'écran "Token API" que sur l'écran "Démarrer une session"). `background.js` le lit via `getIdleThresholdSeconds()` (jamais codé en dur) pour `chrome.idle.setDetectionInterval()` et pour les deux appels à `chrome.idle.queryState()` (`syncFocusAndIdleState`, `isReallyActiveNow`). Un listener `chrome.storage.onChanged` réapplique `setDetectionInterval()` immédiatement si la valeur change, sans attendre un redémarrage du service worker.
+
+**Maintien du tracking pendant lecture média (ajouté le 2026-06-23)** : `chrome.idle` se base uniquement sur l'activité clavier/souris/écran — un utilisateur qui regarde une vidéo ou écoute un podcast sans toucher la souris serait à tort détecté comme idle et verrait son segment coupé. `recomputeActiveSegment()` interroge donc `chrome.tabs.query({ active: true, lastFocusedWindow: true })` et regarde la propriété `audible` de l'onglet actif (`isActiveTabAudible()`) :
+- `audible === true` → ignore l'état idle (à la fois `userIdle` du listener et la revérification live `isReallyActiveNow()`) ; le segment continue/redémarre normalement. Le focus fenêtre (`windowFocused`) reste, lui, requis sans exception.
+- `audible === false` → comportement inchangé : idle coupe le segment.
 
 **claude.ai — assignation manuelle uniquement** : claude.ai n'encode pas le projet dans l'URL (`claude.ai/chat/{chatId}` est identique quel que soit le projet). Une tentative d'auto-détection du projet via content script (fichier `content-claude.js`) a été **abandonnée le 2026-06-22** — le DOM de claude.ai est trop fragile à cibler sans exécution réelle du navigateur, et les sélecteurs ne survivent pas aux mises à jour. Il n'existe donc **aucun fichier content script** dans l'extension. claude.ai est matchée par domaine seul et apparaît comme "Non assigné" par défaut sauf configuration manuelle (WorkContext avec entrée domaine+chemin, ex. `claude.ai/project/abc123`, côté dashboard).
 
