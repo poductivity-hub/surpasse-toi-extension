@@ -49,6 +49,8 @@ Un "segment de tracking actif" n'existe que si **toutes** les conditions sont vr
 - `windowFocused: boolean`
 - `userIdle: boolean`
 
+`activeDomain`/`activePath`/`segmentStartedAt` sont en plus **mirrorés** dans `chrome.storage.local["activeSegment"]` pour survivre à un kill du service worker (voir "Persistance du segment en cours" plus bas).
+
 Listeners :
 - `chrome.tabs.onActivated` — changement d'onglet
 - `chrome.tabs.onUpdated` — changement d'URL dans l'onglet actif (filtre `changeInfo.url` + `tab.active`)
@@ -69,6 +71,12 @@ Listeners :
 Les listeners `onFocusChanged`/`onActivated`/`onStateChanged` restent la voie rapide pour la réactivité immédiate ; cette double vérification ne fait que combler l'angle mort du redémarrage du SW. N'affecte pas `MAX_SEGMENT_MS` ni la logique de flush.
 
 **Seuil d'inactivité configurable (ajouté le 2026-06-23)** : le seuil (en secondes, 60 par défaut) est stocké dans `chrome.storage.local["idleThresholdSeconds"]`, réglable via un champ numérique dans le popup (visible aussi bien sur l'écran "Token API" que sur l'écran "Démarrer une session"). `background.js` le lit via `getIdleThresholdSeconds()` (jamais codé en dur) pour `chrome.idle.setDetectionInterval()` et pour les deux appels à `chrome.idle.queryState()` (`syncFocusAndIdleState`, `isReallyActiveNow`). Un listener `chrome.storage.onChanged` réapplique `setDetectionInterval()` immédiatement si la valeur change, sans attendre un redémarrage du service worker.
+
+**Persistance du segment en cours (ajouté le 2026-06-23)** : le segment actif (`activeDomain`/`activePath`/`segmentStartedAt`) vivait auparavant **uniquement en variable JS en mémoire**. Le service worker MV3 pouvant être tué par Chrome à tout moment après ~30 s sans évènement, un kill survenant **pendant** un segment de navigation active faisait perdre tout le temps écoulé depuis `segmentStartedAt` (au réveil, `segmentStartedAt` repartait à `null`, donc `flushSegmentIfAny()` ne créditait rien). Correctif :
+- À chaque démarrage de segment, `recomputeActiveSegment()` écrit un **miroir persistant** dans `chrome.storage.local["activeSegment"]` : `{ domain, path, startedAt }`. `flushSegmentIfAny()` le retire dès que le segment est clos normalement.
+- `recoverOrphanSegment()` lit ce miroir au réveil du service worker (en tête de `recomputeActiveSegment()`, en tête du handler du flush alarm, et dans `onInstalled`/`onStartup`). Si un segment orphelin existe, il est crédité au buffer journalier exactement comme un flush normal, via le helper partagé `creditSegmentToBuffer()` — **avant** qu'un nouveau segment ne démarre.
+- **Pas de double comptage** : `recoverOrphanSegment()` ne fait rien si un segment est déjà actif en mémoire (le SW est vivant → le flush normal s'en charge), et retire le miroir avant de créditer. Le miroir reflète toujours soit le segment en mémoire courant, soit rien — jamais deux segments distincts.
+- **Cohérence avec l'anti-veille** : la récupération passe par le même `creditSegmentToBuffer()`, donc le cap `MAX_SEGMENT_MS` (90 s) s'applique. Si le kill du SW a coïncidé avec une mise en veille de la machine, l'écart dépasse 90 s et **rien n'est crédité** (comportement correct, identique au flush normal). Un segment légitime tué entre deux flushs (≤ ~60 s) est lui correctement récupéré.
 
 **Maintien du tracking pendant lecture média (ajouté le 2026-06-23)** : `chrome.idle` se base uniquement sur l'activité clavier/souris/écran — un utilisateur qui regarde une vidéo ou écoute un podcast sans toucher la souris serait à tort détecté comme idle et verrait son segment coupé. `recomputeActiveSegment()` interroge donc `chrome.tabs.query({ active: true, lastFocusedWindow: true })` et regarde la propriété `audible` de l'onglet actif (`isActiveTabAudible()`) :
 - `audible === true` → ignore l'état idle (à la fois `userIdle` du listener et la revérification live `isReallyActiveNow()`) ; le segment continue/redémarre normalement. Le focus fenêtre (`windowFocused`) reste, lui, requis sans exception.

@@ -16,6 +16,10 @@ const FOCUS_ALARM = "focusEnd";
 const BUFFER_KEY = "trackingBuffer";
 const TOKEN_KEY = "apiToken";
 const FOCUS_SESSION_KEY = "activeFocusSession";
+// Miroir persistant du segment en cours (cf. "Persistance du segment" dans CONTEXT.md).
+// Écrit à chaque démarrage de segment, retiré à chaque flush. Permet de récupérer le
+// temps d'un segment en cours si le service worker MV3 est tué avant le prochain flush.
+const ACTIVE_SEGMENT_KEY = "activeSegment";
 const WHITELIST_BLOCK_RULE_ID = 1000;
 
 let activeDomain = null;
@@ -62,11 +66,13 @@ async function syncFocusAndIdleState() {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
   applyIdleDetectionInterval();
+  recoverOrphanSegment();
   syncFocusAndIdleState();
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
   applyIdleDetectionInterval();
+  recoverOrphanSegment();
   syncFocusAndIdleState();
 });
 
@@ -114,25 +120,19 @@ function migrateDomainEntry(entry) {
   return entry || {};
 }
 
-async function flushSegmentIfAny() {
-  if (!activeDomain || segmentStartedAt === null) return;
-  const now = Date.now();
-  const startedAt = segmentStartedAt;
+// Crédite au buffer journalier la durée d'un segment (domaine, path, [startedAt, now]),
+// en appliquant les mêmes garde-fous quel que soit l'appelant (flush normal OU
+// récupération d'un segment orphelin après un kill du SW) :
+//  - ignore les segments < 1 s ;
+//  - ignore tout segment plus long que MAX_SEGMENT_MS (trou de veille/suspension/kill),
+//    pour ne jamais créditer un intervalle pendant lequel le décompte n'a pas tourné.
+async function creditSegmentToBuffer(domain, path, startedAt, now) {
   const elapsedMs = now - startedAt;
-  const domain = activeDomain;
-  const path = activePath;
-  segmentStartedAt = null;
-  activeDomain = null;
-  activePath = null;
   if (elapsedMs < 1000) return;
-  // Garde-fou veille/suspension : un écart anormalement grand entre le début du
-  // segment et maintenant signifie que la machine a dormi/été suspendue (RAM gelée,
-  // les alarmes ne tournent pas, mais segmentStartedAt survit). On NE crédite RIEN :
-  // on traite l'intervalle comme un "trou" et on laisse repartir un segment frais.
   if (elapsedMs > MAX_SEGMENT_MS) {
     console.warn(
       `[surpasse-toi] Segment ignoré : ${Math.round(elapsedMs / 1000)}s écoulées (> ${MAX_SEGMENT_MS / 1000}s) ` +
-      `pour ${domain}${path || ""} — probable veille/suspension, aucun temps crédité.`
+      `pour ${domain}${path || ""} — probable veille/suspension/kill du SW, aucun temps crédité.`
     );
     return;
   }
@@ -145,6 +145,36 @@ async function flushSegmentIfAny() {
   domainEntry[pathKey] = (domainEntry[pathKey] || 0) + seconds;
   buffer[date][domain] = domainEntry;
   await chrome.storage.local.set({ [BUFFER_KEY]: buffer });
+}
+
+async function flushSegmentIfAny() {
+  if (!activeDomain || segmentStartedAt === null) return;
+  const now = Date.now();
+  const startedAt = segmentStartedAt;
+  const domain = activeDomain;
+  const path = activePath;
+  segmentStartedAt = null;
+  activeDomain = null;
+  activePath = null;
+  // Le segment en mémoire est désormais clos : on retire son miroir persistant pour
+  // qu'il ne soit pas récupéré une seconde fois comme "orphelin" au prochain réveil.
+  await chrome.storage.local.remove(ACTIVE_SEGMENT_KEY);
+  await creditSegmentToBuffer(domain, path, startedAt, now);
+}
+
+// Récupération d'un segment orphelin : si le service worker MV3 a été tué pendant un
+// segment en cours, les variables en mémoire ont été perdues mais le miroir persistant
+// (ACTIVE_SEGMENT_KEY) a survécu. Au réveil, on crédite le temps écoulé comme un flush
+// normal (mêmes garde-fous via creditSegmentToBuffer, dont le cap MAX_SEGMENT_MS qui
+// neutralise le cas où le kill a coïncidé avec une veille). On ne fait rien si un segment
+// est déjà actif en mémoire (le SW est vivant, le flush normal s'en chargera) — évite
+// tout double comptage.
+async function recoverOrphanSegment() {
+  if (activeDomain || segmentStartedAt !== null) return;
+  const { [ACTIVE_SEGMENT_KEY]: seg } = await chrome.storage.local.get(ACTIVE_SEGMENT_KEY);
+  if (!seg || !seg.domain || typeof seg.startedAt !== "number") return;
+  await chrome.storage.local.remove(ACTIVE_SEGMENT_KEY);
+  await creditSegmentToBuffer(seg.domain, seg.path || null, seg.startedAt, Date.now());
 }
 
 // Filet de sécurité à l'ouverture : si le service worker MV3 a été tué par Chrome
@@ -172,6 +202,8 @@ async function isActiveTabAudible() {
 }
 
 async function recomputeActiveSegment() {
+  // Avant tout : créditer un éventuel segment orphelin laissé par un kill du SW.
+  await recoverOrphanSegment();
   await flushSegmentIfAny();
   if (!windowFocused) return;
   const audible = await isActiveTabAudible();
@@ -187,6 +219,11 @@ async function recomputeActiveSegment() {
   activeDomain = domain;
   activePath = extractPath(tab.url);
   segmentStartedAt = Date.now();
+  // Miroir persistant immédiat : si le SW est tué avant le prochain flush, ce segment
+  // pourra être récupéré au réveil au lieu d'être perdu.
+  await chrome.storage.local.set({
+    [ACTIVE_SEGMENT_KEY]: { domain: activeDomain, path: activePath, startedAt: segmentStartedAt }
+  });
 }
 
 chrome.tabs.onActivated.addListener(() => { recomputeActiveSegment(); });
@@ -209,6 +246,9 @@ chrome.idle.onStateChanged.addListener((state) => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== FLUSH_ALARM) return;
+  // Récupère d'abord un segment orphelin (kill du SW depuis le dernier flush) pour
+  // que son temps soit crédité puis envoyé dans le même cycle.
+  await recoverOrphanSegment();
   await flushSegmentIfAny();
   await sendBuffer();
   await recomputeActiveSegment();
