@@ -7,6 +7,20 @@ const DURATIONS = [15, 30, 45, 60, 75, 90, 120];
 let selectedDuration = 30;
 let timerInterval = null;
 
+function showDiagnostic(message) {
+  const root = document.getElementById("root");
+  const pre = document.createElement("pre");
+  pre.className = "diagnostic";
+  pre.style.whiteSpace = "pre-wrap";
+  pre.style.wordBreak = "break-word";
+  pre.textContent = message;
+  if (root) {
+    root.appendChild(pre);
+  } else {
+    document.body.appendChild(pre);
+  }
+}
+
 function idleThresholdFieldHtml(value) {
   return `
     <div class="field">
@@ -77,6 +91,12 @@ async function renderStartForm(root, token) {
     const res = await fetch(FOCUS_LISTS_API, {
       headers: { "Authorization": `Bearer ${token}` }
     });
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      const rawText = await res.text();
+      showDiagnostic(`Réponse non-JSON (status ${res.status}, content-type "${contentType}") :\n\n${rawText}`);
+      throw new Error("Erreur de chargement");
+    }
     if (!res.ok) throw new Error("Erreur de chargement");
     lists = await res.json();
   } catch (err) {
@@ -201,4 +221,7 @@ async function render() {
   }
 }
 
-render();
+render().catch((err) => {
+  console.error("Erreur d'initialisation du popup:", err);
+  showDiagnostic(`${err && err.message ? err.message : String(err)}\n\n${err && err.stack ? err.stack : "(pas de stack trace disponible)"}`);
+});
