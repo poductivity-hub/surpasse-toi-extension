@@ -1,8 +1,7 @@
 const API_URL = "https://dashboard.surpassetoi.fr/api/extension/track";
-const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/focus-lists";
+const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/extension/focus-lists";
 const FOCUS_SESSIONS_API = "https://dashboard.surpassetoi.fr/api/focus-sessions";
-const IDLE_THRESHOLD_KEY = "idleThresholdSeconds";
-const DEFAULT_IDLE_THRESHOLD_SECONDS = 60;
+const IDLE_THRESHOLD_SECONDS = 60;
 // Garde-fou anti-veille : durée maximale plausible pour UN segment. Le flush alarm
 // tourne toutes les 60 s et redémarre un segment frais à chaque passage, donc un
 // segment légitime (lecture continue d'une page) ne dépasse jamais ~60 s. On laisse
@@ -28,25 +27,7 @@ let segmentStartedAt = null;
 let windowFocused = true;
 let userIdle = false;
 
-// Seuil d'inactivité configurable depuis le popup (chrome.storage.local["idleThresholdSeconds"]),
-// 60 s par défaut. Lu à chaque fois plutôt que mis en cache, pour réagir immédiatement à un
-// changement de réglage sans redémarrage du service worker.
-async function getIdleThresholdSeconds() {
-  const { [IDLE_THRESHOLD_KEY]: value } = await chrome.storage.local.get(IDLE_THRESHOLD_KEY);
-  return value || DEFAULT_IDLE_THRESHOLD_SECONDS;
-}
-
-async function applyIdleDetectionInterval() {
-  chrome.idle.setDetectionInterval(await getIdleThresholdSeconds());
-}
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes[IDLE_THRESHOLD_KEY]) {
-    applyIdleDetectionInterval();
-  }
-});
-
-applyIdleDetectionInterval();
+chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
 
 // Recale windowFocused/userIdle sur l'état réel au (re)démarrage du service worker,
 // au lieu de partir sur les valeurs en dur true/false — celles-ci seraient
@@ -54,7 +35,7 @@ applyIdleDetectionInterval();
 // absent/idle ou sur une autre fenêtre.
 async function syncFocusAndIdleState() {
   try {
-    const idleState = await chrome.idle.queryState(await getIdleThresholdSeconds());
+    const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
     userIdle = idleState !== "active";
     const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
     windowFocused = !!focusedWindow && focusedWindow.id !== chrome.windows.WINDOW_ID_NONE && !!focusedWindow.focused;
@@ -65,13 +46,11 @@ async function syncFocusAndIdleState() {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
-  applyIdleDetectionInterval();
   recoverOrphanSegment();
   syncFocusAndIdleState();
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
-  applyIdleDetectionInterval();
   recoverOrphanSegment();
   syncFocusAndIdleState();
 });
@@ -185,7 +164,7 @@ async function recoverOrphanSegment() {
 // listeners onFocusChanged/onActivated/onStateChanged restent la voie rapide pour
 // la réactivité immédiate ; cette vérification ne les remplace pas.
 async function isReallyActiveNow() {
-  const idleState = await chrome.idle.queryState(await getIdleThresholdSeconds());
+  const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
   if (idleState !== "active") return false;
   const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
   if (!focusedWindow || focusedWindow.id === chrome.windows.WINDOW_ID_NONE) return false;

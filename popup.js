@@ -1,7 +1,5 @@
 const TOKEN_KEY = "apiToken";
-const IDLE_THRESHOLD_KEY = "idleThresholdSeconds";
-const DEFAULT_IDLE_THRESHOLD_SECONDS = 60;
-const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/focus-lists";
+const FOCUS_LISTS_API = "https://dashboard.surpassetoi.fr/api/extension/focus-lists";
 const DURATIONS = [15, 30, 45, 60, 75, 90, 120];
 
 let selectedDuration = 30;
@@ -19,30 +17,6 @@ function showDiagnostic(message) {
   } else {
     document.body.appendChild(pre);
   }
-}
-
-function idleThresholdFieldHtml(value) {
-  return `
-    <div class="field">
-      <label for="idleThreshold">Seuil d'inactivité (secondes)</label>
-      <input id="idleThreshold" type="number" min="1" step="1" value="${value}" />
-    </div>
-  `;
-}
-
-function bindIdleThresholdField() {
-  const input = document.getElementById("idleThreshold");
-  if (!input) return;
-  input.addEventListener("change", async () => {
-    const value = Math.max(1, Number(input.value) || DEFAULT_IDLE_THRESHOLD_SECONDS);
-    input.value = value;
-    await chrome.storage.local.set({ [IDLE_THRESHOLD_KEY]: value });
-  });
-}
-
-async function getIdleThreshold() {
-  const { [IDLE_THRESHOLD_KEY]: value } = await chrome.storage.local.get(IDLE_THRESHOLD_KEY);
-  return value || DEFAULT_IDLE_THRESHOLD_SECONDS;
 }
 
 async function sendMessage(message) {
@@ -66,12 +40,10 @@ function stopTimer() {
 }
 
 async function renderTokenForm(root) {
-  const idleThreshold = await getIdleThreshold();
   root.innerHTML = `
     <label for="token">Token API</label>
     <input id="token" type="password" placeholder="Colle ton token ici" />
     <button id="save">Enregistrer</button>
-    ${idleThresholdFieldHtml(idleThreshold)}
   `;
   document.getElementById("save").addEventListener("click", async () => {
     const value = document.getElementById("token").value.trim();
@@ -79,7 +51,6 @@ async function renderTokenForm(root) {
     await chrome.storage.local.set({ [TOKEN_KEY]: value });
     render();
   });
-  bindIdleThresholdField();
 }
 
 async function renderStartForm(root, token) {
@@ -139,7 +110,6 @@ async function renderStartForm(root, token) {
     </div>
     <button id="start">Démarrer</button>
     <button id="logout" class="secondary">Déconnecter</button>
-    ${idleThresholdFieldHtml(await getIdleThreshold())}
   `;
 
   document.querySelectorAll(".duration-pill").forEach((pill) => {
@@ -170,7 +140,6 @@ async function renderStartForm(root, token) {
     await chrome.storage.local.remove(TOKEN_KEY);
     render();
   });
-  bindIdleThresholdField();
 }
 
 function renderActiveSession(root, state) {

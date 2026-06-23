@@ -70,7 +70,7 @@ Listeners :
 
 Les listeners `onFocusChanged`/`onActivated`/`onStateChanged` restent la voie rapide pour la réactivité immédiate ; cette double vérification ne fait que combler l'angle mort du redémarrage du SW. N'affecte pas `MAX_SEGMENT_MS` ni la logique de flush.
 
-**Seuil d'inactivité configurable (ajouté le 2026-06-23)** : le seuil (en secondes, 60 par défaut) est stocké dans `chrome.storage.local["idleThresholdSeconds"]`, réglable via un champ numérique dans le popup (visible aussi bien sur l'écran "Token API" que sur l'écran "Démarrer une session"). `background.js` le lit via `getIdleThresholdSeconds()` (jamais codé en dur) pour `chrome.idle.setDetectionInterval()` et pour les deux appels à `chrome.idle.queryState()` (`syncFocusAndIdleState`, `isReallyActiveNow`). Un listener `chrome.storage.onChanged` réapplique `setDetectionInterval()` immédiatement si la valeur change, sans attendre un redémarrage du service worker.
+**Seuil d'inactivité (retiré du popup le 2026-06-23)** : le seuil avait brièvement été rendu configurable via un champ du popup, mais c'était trop fin pour un usage normal — retiré. Le seuil est de nouveau une constante codée en dur (`IDLE_THRESHOLD_SECONDS = 60` dans `background.js`), utilisée par `chrome.idle.setDetectionInterval()` et par les deux appels à `chrome.idle.queryState()` (`syncFocusAndIdleState`, `isReallyActiveNow`).
 
 **Persistance du segment en cours (ajouté le 2026-06-23)** : le segment actif (`activeDomain`/`activePath`/`segmentStartedAt`) vivait auparavant **uniquement en variable JS en mémoire**. Le service worker MV3 pouvant être tué par Chrome à tout moment après ~30 s sans évènement, un kill survenant **pendant** un segment de navigation active faisait perdre tout le temps écoulé depuis `segmentStartedAt` (au réveil, `segmentStartedAt` repartait à `null`, donc `flushSegmentIfAny()` ne créditait rien). Correctif :
 - À chaque démarrage de segment, `recomputeActiveSegment()` écrit un **miroir persistant** dans `chrome.storage.local["activeSegment"]` : `{ domain, path, startedAt }`. `flushSegmentIfAny()` le retire dès que le segment est clos normalement.
@@ -130,7 +130,7 @@ Stocké dans `chrome.storage.local` sous la clé `trackingBuffer` :
 
 ### Contrat API
 
-`GET /api/focus-lists` → `[{ id, name, type, domains, frictionType, frictionChars, frictionDelay }]`
+`GET /api/extension/focus-lists` → `[{ id, name, type, domains, frictionType, frictionChars, frictionDelay }]`
 (`type` = `"blacklist"` ou `"whitelist"`)
 
 `POST /api/focus-sessions` body `{ focusListId, durationMin }` → `{ id }`
